@@ -22,21 +22,32 @@ const POST_FILE = "POST.json";
 
 // An X post address is https://x.com/<handle>/status/<digits> (twitter.com
 // works too). Anything else is a placeholder that has not been filled in yet.
-function isPostAddress(value: unknown): value is string {
-  if (typeof value !== "string") return false;
+// Links copied out of the X app often carry tracking queries (?a=...&s=19)
+// and fragments; those are stripped, so the canonical address is what the
+// gate fetches — the same post, without the tracking tail.
+function normalizePostAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null;
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    return false;
+    return null;
   }
   const hostOk = parsed.hostname === "x.com" ||
     parsed.hostname === "twitter.com" ||
     parsed.hostname.endsWith(".x.com") ||
     parsed.hostname.endsWith(".twitter.com");
-  if (!hostOk || parsed.protocol !== "https:") return false;
+  if (!hostOk || parsed.protocol !== "https:") return null;
   const parts = parsed.pathname.split("/").filter(Boolean);
-  return parts.length === 3 && parts[1] === "status" && /^\d+$/.test(parts[2]);
+  if (parts.length !== 3 || parts[1] !== "status") return null;
+  if (parts[0].length === 0 || !/^\d+$/.test(parts[2])) return null;
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function isPostAddress(value: unknown): value is string {
+  return normalizePostAddress(value) !== null;
 }
 
 function readPostAddress(): string {
@@ -60,7 +71,8 @@ function readPostAddress(): string {
     process.exit(1);
   }
   const url = (parsed as { url?: unknown }).url;
-  if (!isPostAddress(url)) {
+  const canonical = normalizePostAddress(url);
+  if (canonical === null) {
     console.error(
       `${POST_FILE} has no posted address yet (expected ` +
         `https://x.com/<handle>/status/<id>); post the meme first, ` +
@@ -68,7 +80,7 @@ function readPostAddress(): string {
     );
     process.exit(1);
   }
-  return url;
+  return canonical;
 }
 
 function main(): void {
@@ -81,7 +93,8 @@ function main(): void {
     console.error(`could not write ${target}: ${(err as Error).message}`);
     process.exit(1);
   }
-  console.log(`handing off post: ${url}`);
+  const postId = url.split("/").filter(Boolean).pop();
+  console.log(`handing off post ${postId}: ${url}`);
 }
 
 main();
